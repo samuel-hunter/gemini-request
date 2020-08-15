@@ -8,31 +8,6 @@
            ;; status code
            #:status-keyword
 
-           #:+code-input+
-           #:+code-sensitive-input+
-
-           #:+code-success+
-
-           #:+code-redirect+
-           #:+code-redirect-temporary+
-           #:+code-redirect-permanent+
-
-           #:+code-temporary-failure+
-           #:+code-server-unavailable+
-           #:+code-cgi-error+
-           #:+code-proxy-error+
-           #:+code-slow-down+
-
-           #:+code-permanent-failure+
-           #:+code-not-found+
-           #:+code-gone+
-           #:+code-proxy-request-refused+
-           #:+code-bad-request+
-
-           #:+code-client-certificate-required+
-           #:+code-certificate-not-authorized+
-           #:+code-certificate-not-valid+
-
            ;; response
            #:resposne
            #:make-response
@@ -43,7 +18,7 @@
            #:response-body
 
            ;; fetching
-           #:fetch-url))
+           #:gemini-request))
 
 (in-package #:cl-gemini)
 
@@ -64,41 +39,38 @@
 (defmacro define-codes (table-var &body code-forms)
   (let ((largest-code (reduce #'max (mapcar #'cadr code-forms))))
     `(progn
-       ,@(loop :for (code-name value) :in code-forms
-               :for var-symbol := (intern (format nil "+CODE-~A+" code-name))
-               :collect `(defparameter ,var-symbol ,value))
        (defparameter ,table-var (make-array ,(1+ largest-code)
-                                            :element-type 'keyword))
-       ,@(loop :for (code-name value) :in code-forms
-               :for keyword := (intern (string code-name) #.(find-package "KEYWORD"))
+                                            :element-type 'keyword
+                                            :initial-element :undefined))
+       ,@(loop :for (keyword value) :in code-forms
                :collect `(setf (aref ,table-var ,value) ,keyword)))))
 
 ;; Status codes, found in Appendix 1.
 (define-codes +response-codes+
-  (#:input 10)
-  (#:sensitive-input 11)
+  (:input 10)
+  (:sensitive-input 11)
 
-  (#:success 20)
+  (:success 20)
 
-  (#:redirect 30)
-  (#:redirect-temporary 30)
-  (#:redirect-permanent 31)
+  (:redirect 30)
+  (:redirect-temporary 30)
+  (:redirect-permanent 31)
 
-  (#:temporary-failure 40)
-  (#:server-unavailable 41)
-  (#:cgi-error 42)
-  (#:proxy-error 43)
-  (#:slow-down 44)
+  (:temporary-failure 40)
+  (:server-unavailable 41)
+  (:cgi-error 42)
+  (:proxy-error 43)
+  (:slow-down 44)
 
-  (#:permanent-failure 50)
-  (#:not-found 51) ;; You can't find things hidden in Area 51!
-  (#:gone 52)
-  (#:proxy-request-refused 53)
-  (#:bad-request 59)
+  (:permanent-failure 50)
+  (:not-found 51) ;; You can't find things hidden in Area 51!
+  (:gone 52)
+  (:proxy-request-refused 53)
+  (:bad-request 59)
 
-  (#:client-certificate-required 60)
-  (#:certificate-not-authorized 61)
-  (#:certificate-not-valid 62))
+  (:client-certificate-required 60)
+  (:certificate-not-authorized 61)
+  (:certificate-not-valid 62))
 
 (defun status-keyword (code)
   (aref +response-codes+ code))
@@ -156,11 +128,13 @@
                              ""))))
 
 ;; TODO support 1x INPUT response codes
-(defun fetch-url (url server &optional (port 1965))
+(defun fetch-url (url server &key (port 1965)
+                               (verify-ssl cl+ssl:*make-ssl-client-stream-verify-default*))
   (with-open-stream (socket (trivial-sockets:open-stream server port))
     (let* ((ssl (cl+ssl:make-ssl-client-stream
                  socket
                  :unwrap-stream-p t
-                 :external-format '(:utf-8 :eol-style :lf))))
+                 :external-format '(:utf-8 :eol-style :lf)
+                 :verify verify-ssl)))
       (send-request url ssl)
       (read-response ssl))))
