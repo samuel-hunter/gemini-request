@@ -4,6 +4,45 @@
   (:nicknames :gemini :gmi)
   (:use #:cl #:alexandria)
   (:export #:+gemini-version+
+
+           ;; status code
+           #:status-keyword
+
+           #:+code-input+
+           #:+code-sensitive-input+
+
+           #:+code-success+
+
+           #:+code-redirect+
+           #:+code-redirect-temporary+
+           #:+code-redirect-permanent+
+
+           #:+code-temporary-failure+
+           #:+code-server-unavailable+
+           #:+code-cgi-error+
+           #:+code-proxy-error+
+           #:+code-slow-down+
+
+           #:+code-permanent-failure+
+           #:+code-not-found+
+           #:+code-gone+
+           #:+code-proxy-request-refused+
+           #:+code-bad-request+
+
+           #:+code-client-certificate-required+
+           #:+code-certificate-not-authorized+
+           #:+code-certificate-not-valid+
+
+           ;; response
+           #:resposne
+           #:make-response
+           #:response-code
+           #:response-status
+           #:resposne-category
+           #:response-meta
+           #:response-body
+
+           ;; fetching
            #:fetch-url))
 
 (in-package #:cl-gemini)
@@ -61,9 +100,67 @@
   (#:certificate-not-authorized 61)
   (#:certificate-not-valid 62))
 
+(defun status-keyword (code)
+  (aref +response-codes+ code))
+
+(defun code-successp (code)
+  (= +code-success+ code))
+
 (defstruct response
   code meta body)
 
-(defun fetch-url (url &optional proxy (max-retries 0))
-  (declare (ignore url proxy max-retries))
-  (make-response :code +code-success+ :body "Hello, World!"))
+(defun response-status (response)
+  "Return the status keyword of RESPONSE."
+  (status-keyword (response-code response)))
+
+(defun code-category (code)
+  (status-keyword (* (floor code 10) 10)))
+
+(defun response-category (response)
+  "Return the keyword of the RESPONSE's code category."
+  (code-category (response-code response)))
+
+(defun read-line-crlf (stream)
+  (with-output-to-string (out)
+    (loop
+      :for chr := (read-char stream nil)
+      :while (and chr (not (char= chr #\Return)))
+      :do (write-char chr out)
+          ;; consume linefeed
+      :finally (read-char stream nil))))
+
+(defun parse-response-header (response)
+  "Return two values, the response code as a keyword, and the response meta."
+  (multiple-value-bind (code start)
+      (parse-integer response :junk-allowed t)
+
+    (with-input-from-string (s (subseq response start))
+      (peek-char t s)  ;; skip over whitespace
+      (values code
+              (read-stream-content-into-string s)))))
+
+(defun send-request (url stream)
+  "Send a single-line URL request to an SSL stream."
+  (format stream "~A~C~C"
+          url #\Return #\Linefeed)
+  (force-output stream))
+
+(defun read-response (stream)
+  "Consume all data from STREAM and return a structured response."
+  (multiple-value-bind (code meta)
+      (parse-response-header (read-line-crlf stream))
+    (make-response :code code
+                   :meta meta
+                   :body (if (code-successp code)
+                             (read-stream-content-into-string stream)
+                             ""))))
+
+;; TODO support 1x INPUT response codes
+(defun fetch-url (url server &optional (port 1965))
+  (with-open-stream (socket (trivial-sockets:open-stream server port))
+    (let* ((ssl (cl+ssl:make-ssl-client-stream
+                 socket
+                 :unwrap-stream-p t
+                 :external-format '(:utf-8 :eol-style :lf))))
+      (send-request url ssl)
+      (read-response ssl))))
