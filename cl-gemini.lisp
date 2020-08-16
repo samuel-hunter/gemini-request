@@ -7,7 +7,8 @@
    ;; Constants and dynamic vars
    #:+gemini-version+
    #:+gemini-default-port+
-   #:*gemini-default-proxy*
+   #:*gemini-default-proxy-host*
+   #:*gemini-default-proxy-port*
    #:*gemini-default-verify-ssl*
 
    ;; response code
@@ -51,9 +52,14 @@ latest-supported gemini protocol.")
 (defvar +gemini-default-port+ 1965
   "The default port for a gemini server.")
 
-(defvar *gemini-default-proxy* nil
+(defvar *gemini-default-proxy-host* nil
   "The default proxy that a gemini request will go
 through. NIL (default) means requests will not go through a proxy.")
+
+(defvar *gemini-default-proxy-port* nil
+  "The default proxy port that a gemini request will go through if
+*GEMINI-DEFAULT-PROXY-HOST* is bound. NIL (default) means requests go
+through the default Gemini port.")
 
 (defvar *gemini-default-verify-ssl* :optional
   "The default choice for verifying an SSL certificate. It has the
@@ -175,16 +181,30 @@ response code; otherwise, return NIL."
          ,@body))))
 
 ;; Put it together
-(defun gemini-request* (url-string host port verify-ssl)
+(defun gemini-request* (uri-string host port verify-ssl)
   (with-gemini-stream (gmi host port :ssl-options (:verify verify-ssl))
-    (gemini-send-line url-string gmi)
+    (gemini-send-line uri-string gmi)
     (gemini-read-response gmi)))
+
+(defun uri-host (uri-string)
+  (puri:uri-host (puri:parse-uri uri-string)))
+
+(defun uri-port (uri-string)
+  (puri:uri-port (puri:parse-uri uri-string)))
 
 ;; TODO support 1x INPUT response codes
 ;; TODO support redirects
-(defun gemini-request (url-string proxy &key
-                                    ;; (proxy (or *gemini-default-proxy*
-                                    ;;            (purl:url-host url-string)))
-                                    (port +gemini-default-port+)
+(defun gemini-request (uri-string &key
+                                    (proxy-host (or *gemini-default-proxy-host*
+                                                    (uri-host uri-string)))
+                                    proxy-port
                                     (verify-ssl *gemini-default-verify-ssl*))
-  (gemini-request* url-string proxy port verify-ssl))
+  ;; Set the proxy port if none is set yet. I can't do this in the
+  ;; function header because it needs to know the value of PROXY-HOST
+  ;; to decide the default value.
+  (unless proxy-port
+    (setf proxy-port (or (if proxy-host
+                             *gemini-default-proxy-port*
+                             (uri-port uri-string))
+                         +gemini-default-port+)))
+  (gemini-request* uri-string proxy-host proxy-port verify-ssl))

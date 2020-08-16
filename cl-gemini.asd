@@ -7,7 +7,7 @@
   :version "0.0.1"
   :depends-on (#:alexandria
                #:cl+ssl
-               #:purl
+               #:puri
                #:trivial-sockets)
 
   :serial t
