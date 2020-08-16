@@ -1,9 +1,10 @@
 # cl-gemini
-### _Samuel Hunter_
 
-This is a project to do ... something.
+A library for communication to servers through the gemini protocol.
 
-## License
+---
 
-BSD 3-Clause
+## Quick Usage
+
+TODO
 
