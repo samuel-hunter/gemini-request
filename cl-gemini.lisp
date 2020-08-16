@@ -7,8 +7,7 @@
    ;; Constants and dynamic vars
    #:+gemini-version+
    #:+gemini-default-port+
-   #:*gemini-default-proxy-host*
-   #:*gemini-default-proxy-port*
+   #:*gemini-default-proxy*
    #:*gemini-default-verify-ssl*
 
    ;; response code
@@ -52,14 +51,10 @@ library's supported gemini protocol.")
 (defvar +gemini-default-port+ 1965
   "The default port for a gemini server.")
 
-(defvar *gemini-default-proxy-host* nil
+(defvar *gemini-default-proxy* nil
   "The default proxy that a gemini request will go
-through. NIL (default) means requests will not go through a proxy.")
-
-(defvar *gemini-default-proxy-port* nil
-  "The default proxy port that a gemini request will go through if
-*gemini-default-proxy-host* is bound. NIL (default) means requests go
-through the default Gemini port.")
+through. NIL (default) means requests will not go through a proxy. See
+GEMINI-REQUEST's PROXY argument for more documentation.")
 
 (defvar *gemini-default-verify-ssl* :optional
   "The default choice for verifying an SSL certificate. It has the
@@ -241,25 +236,18 @@ control."
     (gemini-send-line uri-string gmi)
     (gemini-read-response gmi)))
 
-(defun uri-host (uri-string)
-  (puri:uri-host (puri:parse-uri uri-string)))
-
-(defun uri-port (uri-string)
-  (puri:uri-port (puri:parse-uri uri-string)))
-
-(defun gemini-request (uri-string &key
-                                    (proxy-host (or *gemini-default-proxy-host*
-                                                    (uri-host uri-string)))
-                                    proxy-port
-                                    (verify-ssl *gemini-default-verify-ssl*)
-                                    (max-redirects 5)
-                                    (gemini-error-p t))
+(defun gemini-request (uri &key
+                             (proxy *gemini-default-proxy*)
+                             (verify-ssl *gemini-default-verify-ssl*)
+                             (max-redirects 5)
+                             (gemini-error-p t))
   "Sends a Gemini request to a server and returns its reply as a
-GMI-RESPONSE object. URI-STRING is where the request is sent to.
+GMI-RESPONSE object. URI is where the request is sent to, and can
+either be a string, or a PURI:URI object.
 
-If PROXY-HOST is not NIL, it should be a string denoting a proxy
-server through which the request should be sent. Defaults to
-*gemini-default-proxy-host*.
+If PROXY is not NIL, it should be either a string denoting a proxy
+server through which the request should be sent, or a cons pair
+of (HOST-STRING PORT-NUMBER). Defaults to *gemini-default-proxy-host*.
 
 VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM as the VERIFY
 argument. Defaults to *gemini-default-verify-ssl*. See
@@ -275,17 +263,22 @@ returning a response when its code is 4x (TEMPORARY FAILURE),
 5x (PERMANENT FAILURE), 6x (CLIENT CERTIFICATE REQUIRED), or an
 unknown respone code. It does not influence raising an error for too
 many requests. Defaults to T."
-  ;; Set the proxy port if none is set yet. I can't do this in the
-  ;; function header because it needs to know the value of PROXY-HOST
-  ;; to decide the default value.
-  (unless proxy-port
-    (setf proxy-port (or (if proxy-host
-                             *gemini-default-proxy-port*
-                             (uri-port uri-string))
-                         +gemini-default-port+)))
+  ;; Configure parameters.
+  (setf uri
+        (etypecase uri
+          (string (puri:parse-uri uri))
+          (puri:uri (puri:copy-uri uri))))
+
+  (etypecase proxy
+    (null (setf proxy (cons (puri:uri-host uri)
+                            +gemini-default-port+)))
+    (string (setf proxy (cons proxy +gemini-default-port+)))
+    (cons))
 
   (loop :with redirect-trace := ()
-        :for response := (gemini-request* uri-string proxy-host proxy-port verify-ssl)
+        :for response := (gemini-request* (puri:render-uri uri nil)
+                                          (car proxy) (cdr proxy)
+                                          verify-ssl)
         :for redirects :upfrom 0
         :do (ecase (gmi-category response)
               ;; any non-exceptional categories
@@ -298,7 +291,7 @@ many requests. Defaults to T."
                (with-slots (code meta) response
                  (unless (minusp max-redirects)
                    (push (cons (gmi-status code) meta) redirect-trace))
-                 (setf uri-string meta)))
+                 (setf uri (puri:parse-uri meta))))
 
               ;; failure
               ((:temporary-failure
