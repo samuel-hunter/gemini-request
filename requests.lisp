@@ -16,15 +16,11 @@
    #:gmi-status=
    #:gmi-cat=
 
-   ;; response data
-   #:gmi-response
-   #:gmi-code
-   #:gmi-meta
-   #:gmi-body
-
    ;; conditions
    #:gmi-error
    #:gmi-too-many-redirects
+   #:gmi-code
+   #:gmi-meta
    #:gmi-redirect-trace
 
    ;; request
@@ -107,58 +103,33 @@ verify.")
   (:permanent-failure 5)
   (:client-certificate-required 6))
 
-(defgeneric gmi-status (obj)
-  (:documentation
-   "Return a keyword representation of OBJ if it is (or has) a valid
-Gemini response code; otherwise, return NIL.")
-  (:method ((obj integer))
-    (and (< -1 obj (length +response-codes+))
-         (aref +response-codes+ obj))))
+(defun gmi-status (code)
+  "Return a keyword representation of OBJ if it is (or has) a valid
+Gemini response code; otherwise, return NIL."
+  (and (< -1 code (length +response-codes+))
+       (aref +response-codes+ code)))
 
-(defgeneric gmi-category (obj)
-  (:documentation
-   "Return a keyword representation of OBJ's category if it is (or
-has) a valid Gemini response code; otherwise, return NIL.")
-  (:method ((obj integer))
-    (let ((category (floor obj 10)))
-      (and (< -1 category (length +response-categories+))
-           (aref +response-categories+ category)))))
+(defun gmi-category (code)
+  "Return a keyword representation of OBJ's category if it is (or
+has) a valid Gemini response code; otherwise, return NIL."
+  (and (gmi-status code)
+       (aref +response-categories+ (floor code 10))))
 
-(defun gmi-status= (status obj)
-  "Return whether the keyword STATUS describes OBJ's response code."
-  (eq status (gmi-status obj)))
+(defun gmi-status= (status code)
+  "Return whether the keyword STATUS describes CODE."
+  (eq status (gmi-status code)))
 
-(defun gmi-cat= (category obj)
-  "Return whether the keyword CATEGORY describes OBJ's response category."
-  (eq category (gmi-category obj)))
-
-;; response data
-
-(defclass gmi-response ()
-  ((code :type integer :initarg :code :reader gmi-code)
-   (meta :type string :initarg :meta :reader gmi-meta)
-   (body :type (or string null) :initarg :body :reader gmi-body)))
-
-(defmethod print-object ((obj gmi-response) stream)
-  (with-slots (code meta body) obj
-    (format stream "#<~S CODE=~A (~A) META=~S~@[ BODY=~S~]>"
-            'gmi-response
-            code (gmi-status code)
-            meta
-            body)))
-
-(defmethod gmi-status ((obj gmi-response))
-  (gmi-status (gmi-code obj)))
-
-(defmethod gmi-category ((obj gmi-response))
-  (gmi-category (gmi-code obj)))
+(defun gmi-cat= (category code)
+  "Return whether the keyword CATEGORY describes CODE."
+  (eq category (gmi-category code)))
 
 ;; Conditions
 
 (define-condition gmi-error (error)
-  ((resposne :initarg :response :reader gmi-response))
+  ((code :initarg :code :reader gmi-code)
+   (meta :initarg :meta :reader gmi-meta))
   (:report (lambda (condition stream)
-             (with-slots (code meta) (gmi-response condition)
+             (with-slots (code meta) condition
                (format stream "Response returned code ~D (~A): ~A"
                        code (or (gmi-status code) :unknown) meta)))))
 
@@ -202,11 +173,10 @@ has) a valid Gemini response code; otherwise, return NIL.")
   "Consume all data from STREAM and return a structured response."
   (multiple-value-bind (code meta)
       (parse-response-header (read-line-crlf stream))
-    (make-instance 'gmi-response
-                   :code code
-                   :meta meta
-                   :body (and (gmi-cat= :success code)
-                             (read-stream-content-into-string stream)))))
+    (values (and (gmi-cat= :success code)
+                 (read-stream-content-into-string stream))
+            code
+            meta)))
 
 ;; Set up the stream
 (defmacro with-gemini-stream ((var server port &key ssl-options) &body body)
@@ -223,9 +193,12 @@ has) a valid Gemini response code; otherwise, return NIL.")
 
 (defun gemini-request* (uri-string host port verify-ssl)
   "Sends a Gemini request to HOST:PORT asking for the resource
-URI-STRING. VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM
-as the VERIFY argument. See *gemini-default-verify-ssl* for more
-documentation.
+described in URI-STRING. This function returns THREE values - the body
+of the response (which is NIL in non-successful responses), the status
+code as an integer, and the response meta information.
+
+VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM as the VERIFY
+argument. See *gemini-default-verify-ssl* for more documentation.
 
 This alternative command does not resolve redirects, automatically
 resolve the host or port to request from, or raise an error on
@@ -241,9 +214,14 @@ control."
                              (verify-ssl *gemini-default-verify-ssl*)
                              (max-redirects 5)
                              (gemini-error-p t))
-  "Sends a Gemini request to a server and returns its reply as a
-GMI-RESPONSE object. URI is where the request is sent to, and can
-either be a string, or a PURI:URI object.
+  "Sends a Gemini request to a server and returns its response. URI is
+where the request is sent to, and can either be a string, or a
+PURI:URI object. This function returns FOUR values - the body of the
+response (which is NIL in non-successful responses), the status code
+as an integer, the response meta information (which would be the MIME
+media type in successful responses), and finally the URI the reply
+comes from (which might be different from the URI the request was sent
+to in case of redirects).
 
 If PROXY is not NIL, it should be either a string denoting a proxy
 server through which the request should be sent, or a cons pair
@@ -276,22 +254,22 @@ many requests. Defaults to T."
     (cons))
 
   (loop :with redirect-trace := ()
-        :for response := (gemini-request* (puri:render-uri uri nil)
-                                          (car proxy) (cdr proxy)
-                                          verify-ssl)
+        :with uri-string := (puri:render-uri uri nil)
+        :for (body code meta) := (multiple-value-list (gemini-request* uri-string
+                                                                       (car proxy) (cdr proxy)
+                                                                       verify-ssl))
         :for redirects :upfrom 0
-        :do (ecase (gmi-category response)
+        :do (ecase (gmi-category code)
               ;; any non-exceptional categories
               ((:success
                 :input)
-               (return response))
+               (return (values body code meta uri-string)))
 
               ;; continue looping with a new uri
               (:redirect
-               (with-slots (code meta) response
-                 (unless (minusp max-redirects)
-                   (push (cons (gmi-status code) meta) redirect-trace))
-                 (setf uri (puri:parse-uri meta))))
+               (unless (minusp max-redirects)
+                 (push (cons (gmi-status code) meta) redirect-trace))
+               (setf uri (puri:parse-uri meta)))
 
               ;; failure
               ((:temporary-failure
@@ -299,9 +277,9 @@ many requests. Defaults to T."
                 :client-certificate-required
                 nil)
                (if gemini-error-p
-                   (error 'gmi-error :response response)
-                   (return response))))
+                   (error 'gmi-error :code code :meta meta)
+                   (return (values body code meta uri-string)))))
         :when (= redirects max-redirects)
           :do (error 'gmi-too-many-redirects
-                     :response response
+                     :code code :meta meta
                      :redirect-trace redirect-trace)))
