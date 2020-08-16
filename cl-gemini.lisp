@@ -12,8 +12,10 @@
    #:*gemini-default-verify-ssl*
 
    ;; response code
-   #:gemini-status
-   #:gemini-successp
+   #:gmi-status
+   #:gmi-category
+   #:gmi-status=
+   #:gemi-cat=
 
    ;; response data
    #:response
@@ -23,6 +25,10 @@
    #:response-category
    #:response-meta
    #:response-body
+
+   ;; conditions
+   #:gemini-error
+   #:gemini-too-many-redirects
 
    ;; low-level request (for finer control)
    #:gemini-send-line
@@ -83,7 +89,6 @@ provided, and T means to always verify.")
 
   (:success 20)
 
-  (:redirect 30)
   (:redirect-temporary 30)
   (:redirect-permanent 31)
 
@@ -103,15 +108,35 @@ provided, and T means to always verify.")
   (:certificate-not-authorized 61)
   (:certificate-not-valid 62))
 
-(defun gemini-status (code)
+;; Status categories, bound to the first digit.
+(define-codes +response-categories+
+  (:input 1)
+  (:success 2)
+  (:redirect 3)
+  (:temporary-failure 4)
+  (:permanent-failure 5)
+  (:client-certificate-required 6))
+
+(defun gmi-status (code)
   "Return a keyword representation of CODE if it's a valid Gemini
 response code; otherwise, return NIL."
   (and (< -1 code (length +response-codes+))
-      (aref +response-codes+ code)))
+       (aref +response-codes+ code)))
 
-(defun gemini-successp (code)
-  "Return whether CODE describes a successful response."
-  (eq :success (gemini-status code)))
+(defun gmi-category (code)
+  "Return a keyword representation of CODE's category if it's a valid
+Gemini response code; otherwise, return NIL."
+  (let ((category (floor code 10)))
+    (and (< -1 category (length +response-categories+))
+         (aref +response-categories+ category))))
+
+(defun gmi-status= (status code)
+  "Return whether the keyword STATUS describes the integer CODE."
+  (eq status (gmi-status code)))
+
+(defun gmi-cat= (category code)
+  "Return whether the keyword CATEGORY describes the integer CODE."
+  (eq category (gmi-category code)))
 
 ;; response data
 
@@ -120,14 +145,27 @@ response code; otherwise, return NIL."
 
 (defun response-status (response)
   "Return the status keyword of RESPONSE."
-  (gemini-status (response-code response)))
-
-(defun code-category (code)
-  (gemini-status (* (floor code 10) 10)))
+  (gmi-status (response-code response)))
 
 (defun response-category (response)
   "Return the keyword of the RESPONSE's code category."
-  (code-category (response-code response)))
+  (gmi-category (response-code response)))
+
+;; Conditions
+
+(define-condition gemini-error (error)
+  ((code :initarg :code)
+   (meta :initarg :meta))
+  (:report (lambda (condition stream)
+             (with-slots (code meta) condition
+               (format stream "Response returned code ~D (~A): ~A"
+                       code (gmi-status code) meta)))))
+
+(define-condition gemini-too-many-redirects (gemini-error)
+  ((redirect-trace :initarg :redirect-trace))
+  (:report (lambda (condition stream)
+             (format stream "Too many redirects. Trace: ~S"
+                     (slot-value condition 'redirect-trace)))))
 
 ;; Write a request
 
@@ -165,7 +203,7 @@ response code; otherwise, return NIL."
       (parse-response-header (read-line-crlf stream))
     (make-response :code code
                    :meta meta
-                   :body (if (gemini-successp code)
+                   :body (if (gmi-cat= :success code)
                              (read-stream-content-into-string stream)
                              ""))))
 
@@ -181,6 +219,8 @@ response code; otherwise, return NIL."
          ,@body))))
 
 ;; Put it together
+
+;; TODO support 1x INPUT response codes
 (defun gemini-request* (uri-string host port verify-ssl)
   (with-gemini-stream (gmi host port :ssl-options (:verify verify-ssl))
     (gemini-send-line uri-string gmi)
@@ -192,13 +232,19 @@ response code; otherwise, return NIL."
 (defun uri-port (uri-string)
   (puri:uri-port (puri:parse-uri uri-string)))
 
-;; TODO support 1x INPUT response codes
-;; TODO support redirects
+(defmacro gemini-error (error-class response &rest misc-args)
+  (once-only (response)
+    `(error ,error-class
+            :code (response-code ,response)
+            :meta (response-meta ,response)
+            ,@misc-args)))
+
 (defun gemini-request (uri-string &key
                                     (proxy-host (or *gemini-default-proxy-host*
                                                     (uri-host uri-string)))
                                     proxy-port
-                                    (verify-ssl *gemini-default-verify-ssl*))
+                                    (verify-ssl *gemini-default-verify-ssl*)
+                                    (max-redirects 5))
   ;; Set the proxy port if none is set yet. I can't do this in the
   ;; function header because it needs to know the value of PROXY-HOST
   ;; to decide the default value.
@@ -207,4 +253,26 @@ response code; otherwise, return NIL."
                              *gemini-default-proxy-port*
                              (uri-port uri-string))
                          +gemini-default-port+)))
-  (gemini-request* uri-string proxy-host proxy-port verify-ssl))
+
+  (loop :with redirect-trace := ()
+        :for response := (gemini-request* uri-string proxy-host proxy-port verify-ssl)
+        :for redirects :upfrom 0
+        :do (ecase (response-category response)
+              (:success (return response))
+
+              ;; continue looping with a new uri
+              (:redirect
+               (with-slots (code meta) response
+                 (push (cons (gmi-status code) meta) redirect-trace)
+                 (setf uri-string meta)))
+
+              ;; failure
+              ((:temporary-failure
+                :permanent-failure
+                :client-certificate-required
+                nil)
+               (gemini-error 'gemini-error response))
+              )
+        :when (= redirects max-redirects)
+          :do (gemini-error 'gemini-too-many-redirects response
+                            :redirect-trace redirect-trace)))
