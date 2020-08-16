@@ -142,11 +142,11 @@ has) a valid Gemini response code; otherwise, return NIL.")
 (defclass gmi-response ()
   ((code :type integer :initarg :code :reader gmi-code)
    (meta :type string :initarg :meta :reader gmi-meta)
-   (body :type string :initarg :body :reader gmi-body)))
+   (body :type (or string null) :initarg :body :reader gmi-body)))
 
 (defmethod print-object ((obj gmi-response) stream)
   (with-slots (code meta body) obj
-    (format stream "#<~S CODE=~A (~A) META=~S BODY=~S>"
+    (format stream "#<~S CODE=~A (~A) META=~S~@[ BODY=~S~]>"
             'gmi-response
             code (gmi-status code)
             meta
@@ -211,9 +211,8 @@ has) a valid Gemini response code; otherwise, return NIL.")
     (make-instance 'gmi-response
                    :code code
                    :meta meta
-                   :body (if (gmi-cat= :success code)
-                             (read-stream-content-into-string stream)
-                             ""))))
+                   :body (and (gmi-cat= :success code)
+                             (read-stream-content-into-string stream)))))
 
 ;; Set up the stream
 (defmacro with-gemini-stream ((var server port &key ssl-options) &body body)
@@ -279,10 +278,11 @@ processed before signaling a GMI-TOO-MANY-REDIRECTS error. Negative
 values signal that it should process an infinite number of
 redirects (not recommended). Defaults to 5.
 
-GEMINI-ERROR-P denotes whether to signal a GMI-ERROR when the response
-code is 4x (TEMPORARY FAILURE), 5x (PERMANENT FAILURE), 6x (CLIENT
-CERTIFICATE REQUIRED), or an unknown respone code. It does not
-influence raising an error for too many requests. Defaults to T."
+GEMINI-ERROR-P denotes whether to signal a GMI-ERROR instead of
+returning a response when its code is 4x (TEMPORARY FAILURE),
+5x (PERMANENT FAILURE), 6x (CLIENT CERTIFICATE REQUIRED), or an
+unknown respone code. It does not influence raising an error for too
+many requests. Defaults to T."
   ;; Set the proxy port if none is set yet. I can't do this in the
   ;; function header because it needs to know the value of PROXY-HOST
   ;; to decide the default value.
