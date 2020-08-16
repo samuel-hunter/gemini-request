@@ -15,20 +15,18 @@
    #:gmi-status
    #:gmi-category
    #:gmi-status=
-   #:gemi-cat=
+   #:gmi-cat=
 
    ;; response data
-   #:response
-   #:make-response
-   #:response-code
-   #:response-status
-   #:response-category
-   #:response-meta
-   #:response-body
+   #:gmi-response
+   #:gmi-code
+   #:gmi-meta
+   #:gmi-body
 
    ;; conditions
-   #:gemini-error
-   #:gemini-too-many-redirects
+   #:gmi-error
+   #:gmi-too-many-redirects
+   #:gmi-redirect-trace
 
    ;; low-level request (for finer control)
    #:gemini-send-line
@@ -117,52 +115,64 @@ provided, and T means to always verify.")
   (:permanent-failure 5)
   (:client-certificate-required 6))
 
-(defun gmi-status (code)
-  "Return a keyword representation of CODE if it's a valid Gemini
-response code; otherwise, return NIL."
-  (and (< -1 code (length +response-codes+))
-       (aref +response-codes+ code)))
+(defgeneric gmi-status (obj)
+  (:documentation
+   "Return a keyword representation of OBJ if it is (or has) a valid
+Gemini response code; otherwise, return NIL.")
+  (:method ((obj integer))
+    (and (< -1 obj (length +response-codes+))
+         (aref +response-codes+ obj))))
 
-(defun gmi-category (code)
-  "Return a keyword representation of CODE's category if it's a valid
-Gemini response code; otherwise, return NIL."
-  (let ((category (floor code 10)))
-    (and (< -1 category (length +response-categories+))
-         (aref +response-categories+ category))))
+(defgeneric gmi-category (obj)
+  (:documentation
+   "Return a keyword representation of OBJ's category if it is (or
+has) a valid Gemini response code; otherwise, return NIL.")
+  (:method ((obj integer))
+    (let ((category (floor obj 10)))
+      (and (< -1 category (length +response-categories+))
+           (aref +response-categories+ category)))))
 
-(defun gmi-status= (status code)
-  "Return whether the keyword STATUS describes the integer CODE."
-  (eq status (gmi-status code)))
+(defun gmi-status= (status obj)
+  "Return whether the keyword STATUS describes OBJ's response code."
+  (eq status (gmi-status obj)))
 
-(defun gmi-cat= (category code)
-  "Return whether the keyword CATEGORY describes the integer CODE."
-  (eq category (gmi-category code)))
+(defun gmi-cat= (category obj)
+  "Return whether the keyword CATEGORY describes OBJ's response category."
+  (eq category (gmi-category obj)))
 
 ;; response data
 
-(defstruct response
-  code meta body)
+(defclass gmi-response ()
+  ((code :type integer :initarg :code :reader gmi-code)
+   (meta :type string :initarg :meta :reader gmi-meta)
+   (body :type string :initarg :body :reader gmi-body)))
 
-(defun response-status (response)
-  "Return the status keyword of RESPONSE."
-  (gmi-status (response-code response)))
+(defmethod print-object ((obj gmi-response) stream)
+  (with-slots (code meta body) obj
+    (format stream "#<~S CODE=~A (~A) META=~S BODY=~S>"
+            'gmi-response
+            code (gmi-status code)
+            meta
+            body)))
 
-(defun response-category (response)
-  "Return the keyword of the RESPONSE's code category."
-  (gmi-category (response-code response)))
+(defmethod gmi-status ((obj gmi-response))
+  (gmi-status (gmi-code obj)))
+
+(defmethod gmi-category ((obj gmi-response))
+  (gmi-category (gmi-code obj)))
 
 ;; Conditions
 
-(define-condition gemini-error (error)
-  ((code :initarg :code)
-   (meta :initarg :meta))
+(define-condition gmi-error (error)
+  ((code :initarg :code :reader gmi-code)
+   (meta :initarg :meta :reader gmi-meta))
   (:report (lambda (condition stream)
              (with-slots (code meta) condition
                (format stream "Response returned code ~D (~A): ~A"
-                       code (gmi-status code) meta)))))
+                       code (or (gmi-status code) :unknown) meta)))))
 
-(define-condition gemini-too-many-redirects (gemini-error)
-  ((redirect-trace :initarg :redirect-trace))
+(define-condition gmi-too-many-redirects (gmi-error)
+  ((redirect-trace :initarg :redirect-trace :reader gmi-redirect-trace))
   (:report (lambda (condition stream)
              (format stream "Too many redirects. Trace: ~S"
                      (slot-value condition 'redirect-trace)))))
@@ -201,7 +211,8 @@ Gemini response code; otherwise, return NIL."
   "Consume all data from STREAM and return a structured response."
   (multiple-value-bind (code meta)
       (parse-response-header (read-line-crlf stream))
-    (make-response :code code
+    (make-instance 'gmi-response
+                   :code code
                    :meta meta
                    :body (if (gmi-cat= :success code)
                              (read-stream-content-into-string stream)
@@ -220,7 +231,6 @@ Gemini response code; otherwise, return NIL."
 
 ;; Put it together
 
-;; TODO support 1x INPUT response codes
 (defun gemini-request* (uri-string host port verify-ssl)
   (with-gemini-stream (gmi host port :ssl-options (:verify verify-ssl))
     (gemini-send-line uri-string gmi)
@@ -235,8 +245,8 @@ Gemini response code; otherwise, return NIL."
 (defmacro gemini-error (error-class response &rest misc-args)
   (once-only (response)
     `(error ,error-class
-            :code (response-code ,response)
-            :meta (response-meta ,response)
+            :code (gmi-code ,response)
+            :meta (gmi-meta ,response)
             ,@misc-args)))
 
 (defun gemini-request (uri-string &key
@@ -257,8 +267,11 @@ Gemini response code; otherwise, return NIL."
   (loop :with redirect-trace := ()
         :for response := (gemini-request* uri-string proxy-host proxy-port verify-ssl)
         :for redirects :upfrom 0
-        :do (ecase (response-category response)
-              (:success (return response))
+        :do (ecase (gmi-category response)
+              ;; any non-exceptional categories
+              ((:success
+                :input)
+               (return response))
 
               ;; continue looping with a new uri
               (:redirect
@@ -271,8 +284,7 @@ Gemini response code; otherwise, return NIL."
                 :permanent-failure
                 :client-certificate-required
                 nil)
-               (gemini-error 'gemini-error response))
-              )
+               (gemini-error 'gmi-error response)))
         :when (= redirects max-redirects)
-          :do (gemini-error 'gemini-too-many-redirects response
-                            :redirect-trace redirect-trace)))
+          :do (gemini-error 'gmi-too-many-redirects response
+                         :redirect-trace redirect-trace)))
