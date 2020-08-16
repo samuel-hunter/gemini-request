@@ -1,4 +1,4 @@
-;;;; cl-gemini.lisp
+;;;; requests.lisp
 
 (defpackage #:cl-gemini
   (:nicknames :gemini :gmi)

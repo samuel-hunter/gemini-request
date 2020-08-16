@@ -11,4 +11,4 @@
                #:trivial-sockets)
 
   :serial t
-  :components ((:file "cl-gemini")))
+  :components ((:file "requests")))
