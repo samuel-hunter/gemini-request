@@ -28,12 +28,8 @@
    #:gmi-too-many-redirects
    #:gmi-redirect-trace
 
-   ;; low-level request (for finer control)
-   #:gemini-send-line
-   #:gemini-read-response
-   #:with-gemini-stream
-
-   ;; high-level request
+   ;; request
+   #:gemini-request*
    #:gemini-request))
 
 (in-package #:cl-gemini)
@@ -51,7 +47,7 @@
 ;; of the protocol and make changes as required.
 (defvar +gemini-version+ '(0 14 2)
   "The major version, minor version, and patchlevel of the
-latest-supported gemini protocol.")
+library's supported gemini protocol.")
 
 (defvar +gemini-default-port+ 1965
   "The default port for a gemini server.")
@@ -62,14 +58,15 @@ through. NIL (default) means requests will not go through a proxy.")
 
 (defvar *gemini-default-proxy-port* nil
   "The default proxy port that a gemini request will go through if
-*GEMINI-DEFAULT-PROXY-HOST* is bound. NIL (default) means requests go
+*gemini-default-proxy-host* is bound. NIL (default) means requests go
 through the default Gemini port.")
 
 (defvar *gemini-default-verify-ssl* :optional
   "The default choice for verifying an SSL certificate. It has the
-same choices as cl+ssl's :verify key - that is, NIL means to not
-verify, :OPTIONAL (default) means to verify if the certificate is
-provided, and T means to always verify.")
+same choices as the CL+SSL:MAKE-SSL-CLIENT-STREAM's :VERIFY keyword
+argument - that is, NIL means to not verify, :OPTIONAL (default) means
+to verify if the certificate is provided, and T means to always
+verify.")
 
 (defmacro define-codes (table-var &body code-forms)
   (let ((largest-code (reduce #'max (mapcar #'cadr code-forms))))
@@ -232,6 +229,16 @@ has) a valid Gemini response code; otherwise, return NIL.")
 ;; Put it together
 
 (defun gemini-request* (uri-string host port verify-ssl)
+  "Sends a Gemini request to HOST:PORT asking for the resource
+URI-STRING. VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM
+as the VERIFY argument. See *gemini-default-verify-ssl* for more
+documentation.
+
+This alternative command does not resolve redirects, automatically
+resolve the host or port to request from, or raise an error on
+unsuccessful response codes. If you feel unsatisfied with how
+GEMINI-REQUEST processes its input, use this instead for finer
+control."
   (with-gemini-stream (gmi host port :ssl-options (:verify verify-ssl))
     (gemini-send-line uri-string gmi)
     (gemini-read-response gmi)))
@@ -254,7 +261,28 @@ has) a valid Gemini response code; otherwise, return NIL.")
                                                     (uri-host uri-string)))
                                     proxy-port
                                     (verify-ssl *gemini-default-verify-ssl*)
-                                    (max-redirects 5))
+                                    (max-redirects 5)
+                                    (gemini-error-p t))
+  "Sends a Gemini request to a server and returns its reply as a
+GMI-RESPONSE object. URI-STRING is where the request is sent to.
+
+If PROXY-HOST is not NIL, it should be a string denoting a proxy
+server through which the request should be sent. Defaults to
+*gemini-default-proxy-host*.
+
+VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM as the VERIFY
+argument. Defaults to *gemini-default-verify-ssl*. See
+*gemini-default-verify-ssl* for more documentation.
+
+MAX-REDIRECTS is the maximum number of redirects that will be
+processed before signaling a GMI-TOO-MANY-REDIRECTS error. Negative
+values signal that it should process an infinite number of
+redirects (not recommended). Defaults to 5.
+
+GEMINI-ERROR-P denotes whether to signal a GMI-ERROR when the response
+code is 4x (TEMPORARY FAILURE), 5x (PERMANENT FAILURE), 6x (CLIENT
+CERTIFICATE REQUIRED), or an unknown respone code. It does not
+influence raising an error for too many requests. Defaults to T."
   ;; Set the proxy port if none is set yet. I can't do this in the
   ;; function header because it needs to know the value of PROXY-HOST
   ;; to decide the default value.
@@ -276,7 +304,8 @@ has) a valid Gemini response code; otherwise, return NIL.")
               ;; continue looping with a new uri
               (:redirect
                (with-slots (code meta) response
-                 (push (cons (gmi-status code) meta) redirect-trace)
+                 (unless (minusp max-redirects)
+                   (push (cons (gmi-status code) meta) redirect-trace))
                  (setf uri-string meta)))
 
               ;; failure
@@ -284,7 +313,9 @@ has) a valid Gemini response code; otherwise, return NIL.")
                 :permanent-failure
                 :client-certificate-required
                 nil)
-               (gemini-error 'gmi-error response)))
+               (if gemini-error-p
+                   (gemini-error 'gmi-error response)
+                   (return response))))
         :when (= redirects max-redirects)
           :do (gemini-error 'gmi-too-many-redirects response
                          :redirect-trace redirect-trace)))
