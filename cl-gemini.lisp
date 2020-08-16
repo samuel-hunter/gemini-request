@@ -161,10 +161,9 @@ has) a valid Gemini response code; otherwise, return NIL.")
 ;; Conditions
 
 (define-condition gmi-error (error)
-  ((code :initarg :code :reader gmi-code)
-   (meta :initarg :meta :reader gmi-meta))
+  ((resposne :initarg :response :reader gmi-response))
   (:report (lambda (condition stream)
-             (with-slots (code meta) condition
+             (with-slots (code meta) (gmi-response condition)
                (format stream "Response returned code ~D (~A): ~A"
                        code (or (gmi-status code) :unknown) meta)))))
 
@@ -248,13 +247,6 @@ control."
 (defun uri-port (uri-string)
   (puri:uri-port (puri:parse-uri uri-string)))
 
-(defmacro gemini-error (error-class response &rest misc-args)
-  (once-only (response)
-    `(error ,error-class
-            :code (gmi-code ,response)
-            :meta (gmi-meta ,response)
-            ,@misc-args)))
-
 (defun gemini-request (uri-string &key
                                     (proxy-host (or *gemini-default-proxy-host*
                                                     (uri-host uri-string)))
@@ -314,8 +306,9 @@ many requests. Defaults to T."
                 :client-certificate-required
                 nil)
                (if gemini-error-p
-                   (gemini-error 'gmi-error response)
+                   (error 'gmi-error :response response)
                    (return response))))
         :when (= redirects max-redirects)
-          :do (gemini-error 'gmi-too-many-redirects response
-                         :redirect-trace redirect-trace)))
+          :do (error 'gmi-too-many-redirects
+                     :response response
+                     :redirect-trace redirect-trace)))
