@@ -29,12 +29,11 @@ use quicklisp to pull in its dependencies, `alexandria`, `cl+ssl`,
 
 ```lisp
 * (require :cl-gemini)
-* (use-package :cl-gemini)
 
 ;; Make a simple gemini request. It returns the response body,
 ;; code, meta text (mimetype for successful requests), and the url of
 ;; the last request (say, if gemini-request handles redirects):
-* (gemini-request "gemini://gemini.circumlunar.space")
+* (gmi:gemini-request "gemini://gemini.circumlunar.space")
 "# Project Gemini
 
 ## Overview
@@ -51,9 +50,11 @@ Gemini is a new internet protoc...ol which:
 ## Extended Usage
 
 ```lisp
+(use-package #:cl-gemini)
+
 ;; Receiving an error code sends a gmi-error by default.
 * (handler-case
-      (gemini-request "gemini://example.com/no-exist")
+      (gemini-request "//example.com/no-exist")
     (gmi-error (err) (format t "Received response ~D.~%" 
                              (gmi-code err))))
 Received response 51.
@@ -64,41 +65,41 @@ Received response 51.
       
 
 ;; You can disable this by setting gemini-error-p to NIL:
-* (gemini-reqeust "gemini://example.com/no-exist"
+* (gemini-reqeust "//example.com/no-exist"
                   :gemini-error-p nil)
 NIL
 51
 "Not found!"
-"gemini://example.com/no-exist"
+"//example.com/no-exist"
 
 ;; You can configure the maximum redirects to automatically follow
 (default is 5).
 * (handler-case
-      (gemini-request "gemini://example.com" :max-redirects 3)
+      (gemini-request "//example.com" :max-redirects 3)
     (gmi-too-many-requests (cond)
       (format t "Too many requests!~%~S~%Goodbye.~%"
               (gmi-redirect-trace cond)))
 Too many requests!
-((:redirect-permanent . "gemini://example.com/3")
- (:redirect-permanent . "gemini://example.com/2")
- (:redirect-permanent . "gemini://example.com/1")
- (:redirect-permanent . "gmeini://example.com"))
+((:redirect-permanent . "//example.com/3")
+ (:redirect-permanent . "//example.com/2")
+ (:redirect-permanent . "//example.com/1")
+ (:redirect-permanent . "//example.com"))
 Goodbye.
 
 ;; You can configure your proxy:
-* (gemini-request "gemini://example.com" :proxy "proxy.example.com")
-* (gemini-request "gemini://example.com" 
+* (gemini-request "//example.com" :proxy "proxy.example.com")
+* (gemini-request "//example.com" 
                   :proxy '("proxy-example.com" 8000))
 * (let ((*gemini-default-proxy* "proxy-example.com"))
-    (gemini-request "gemini://example.com"))
+    (gemini-request "//example.com"))
 
 ;; You can choose whether to verify SSL certificates (for example,
 ;; expressly allowing self-signed certificates or forcing servers
 ;; to be signed by a trusted root authority)
-* (gemini-request "gemini://self-signed.example.com" :verify-ssl nil)
+* (gemini-request "//self-signed.example.com" :verify-ssl nil)
 
 * (let ((*gemini-default-verify-ssl* nil))
-    (gemini-request "gemini://self-signed.example.com" 
+    (gemini-request "//self-signed.example.com" 
                     :verify-ssl nil))
                     
 ;; For more details:
@@ -107,9 +108,9 @@ Goodbye.
 ;; Finally, for lower-level control, You can use gemini-request* to
 ;; send a singular request and don't do anything smart with it. It
 ;; only returns three values, since it doesn't resolve redirects.
-* (gemini-request "gemini://host.example.com/link-that-sends-code-42"
-                  "host.example.com" +gemini-default-port+
-                  *gemini-default-verify-ssl*)
+* (gemini-request* "//host.example.com/link-that-sends-code-42"
+                   "host.example.com" +gemini-default-port+
+                   *gemini-default-verify-ssl*)
 NIL
 42
 "CGI Error"
