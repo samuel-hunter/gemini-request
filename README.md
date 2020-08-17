@@ -76,7 +76,8 @@ NIL
 * (handler-case
       (gemini-request "gemini://example.com" :max-redirects 3)
     (gmi-too-many-requests (cond)
-      (format t "Too many requests!~%~S~%Goodbye.~%")))
+      (format t "Too many requests!~%~S~%Goodbye.~%"
+              (gmi-redirect-trace cond)))
 Too many requests!
 ((:redirect-permanent . "gemini://example.com/3")
  (:redirect-permanent . "gemini://example.com/2")
