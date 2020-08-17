@@ -52,6 +52,11 @@ Gemini is a new internet protoc...ol which:
 ```lisp
 (use-package #:cl-gemini)
 
+;; You can use puri:uri objects as well.
+* (gemini-request (make-instance 'puri:uri 
+                                 :host "example.com"
+                                 :path "about"))
+
 ;; Receiving an error code sends a gmi-error by default.
 * (handler-case
       (gemini-request "//example.com/no-exist")
