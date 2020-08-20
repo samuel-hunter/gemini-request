@@ -4,8 +4,8 @@ A library for communication to servers through the Gemini protocol.
 
 ---
 
-Project Gemini is a semi-recent internet protocol protject that
-describes itself as somewhere between Gopher and the convnetional
+Project Gemini is a semi-recent internet protocol project that
+describes itself as somewhere between Gopher and the conventional
 Web. Instead of being the simplest protocol, Gemini intends to have
 the highest "oomph" for its weight. If you're unfamiliar with Project
 Gemini and want to learn more, I recommend reading the de-facto
@@ -22,7 +22,7 @@ reach out to recommend anything you think would improve it!
 
 ## Quick Usage
 
-Drop this project in a place that ADSF can see it - I personally use
+Drop this project in a place that ASDF can see it - I personally use
 `~/quicklisp/local-projects/` so that quicklisp pulls in its
 dependencies, `alexandria`, `cl+ssl`, `puri`, and `trivial-sockets`.
 
@@ -52,17 +52,21 @@ Gemini is a new internet protoc...ol which:
 (ql:quickload :gemini-request)
 (use-package #:gemini-request)
 
+
 ;; You can use puri:uri objects as well.
 * (gemini-request (make-instance 'puri:uri 
                                  :host "example.com"
                                  :path "about"))
 
+
 ;; Receiving an error code sends a gmi-error by default.
 * (handler-case
       (gemini-request "//example.com/no-exist")
-    (gmi-error (err) (format t "Received response ~D.~%" 
-                             (gmi-code err))))
-Received response 51.
+    (gmi-error (err) (with-accessors ((code gmi-code)
+                                      (meta gmi-meta))
+                       (format t "Received response ~D: ~A~%"
+                               code meta))))
+Received response 51: Not found!
 ;; An error is thrown for any valid 4x, 5x, and 6x response codes, as
 ;; well as any unrecognized response codes. 1x and 2x response codes
 ;; are returned as normal, and 3x redirect response codes are handled
@@ -77,8 +81,9 @@ NIL
 "Not found!"
 "//example.com/no-exist"
 
+
 ;; You can configure the maximum redirects to automatically follow
-(default is 5).
+;; (default is 5).
 * (handler-case
       (gemini-request "//example.com" :max-redirects 3)
     (gmi-too-many-requests (cond)
@@ -90,6 +95,8 @@ Too many requests!
  (:redirect-permanent . "//example.com/1")
  (:redirect-permanent . "//example.com"))
 Goodbye.
+;; As a footnote, gmi-too-many-requests is a child type of gmi-error.
+
 
 ;; You can configure your proxy:
 * (gemini-request "//example.com" :proxy "proxy.example.com")
@@ -98,8 +105,9 @@ Goodbye.
 * (let ((*gemini-default-proxy* "proxy-example.com"))
     (gemini-request "//example.com"))
 
+
 ;; You can choose whether to verify SSL certificates (for example,
-;; expressly allowing self-signed certificates or forcing servers
+;; expressly allowing self-signed certificates, or forcing servers
 ;; to be signed by a trusted root authority)
 * (gemini-request "//self-signed.example.com" :verify-ssl nil)
 
@@ -110,10 +118,11 @@ Goodbye.
 ;; For more details:
 (describe '*gemini-default-verify-ssl*)
 
+
 ;; Finally, for lower-level control, You can use gemini-request* to
 ;; send a singular request and don't do anything smart with it. It
 ;; only returns three values, since it doesn't resolve redirects.
-* (gemini-request* "//host.example.com/link-that-sends-code-42"
+* (gemini-request* "//host.example.com/link-that-breaks-server-cgi-code"
                    "host.example.com" +gemini-default-port+
                    *gemini-default-verify-ssl*)
 NIL
