@@ -1,7 +1,6 @@
 ;;;; requests.lisp
 
-(defpackage #:cl-gemini
-  (:nicknames :gemini :gmi)
+(defpackage #:gemini-request
   (:use #:cl #:alexandria)
   (:export
    ;; Constants and dynamic vars
@@ -27,7 +26,7 @@
    #:gemini-request*
    #:gemini-request))
 
-(in-package #:cl-gemini)
+(in-package #:gemini-request)
 
 ;; Direct quote from
 ;; gemini://gemini.circumlunar.space/docs/specification.gmi

@@ -1,6 +1,6 @@
-;;;; cl-gemini.asd
+;;;; gemini-request.asd
 
-(asdf:defsystem #:cl-gemini
+(asdf:defsystem #:gemini-request
   :description "Communicate to servers through the gemini protocol"
   :author "Samuel Hunter"
   :license  "BSD 3-Clause"
@@ -10,4 +10,4 @@
                #:puri
                #:trivial-sockets)
   :serial t
-  :components ((:file "requests")))
+  :components ((:file "request")))

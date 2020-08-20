@@ -1,16 +1,16 @@
 image: alpine/edge
 repositories: {}
 environment:
- mirror: git@github.com:samuel-hunter/cl-gemini.git
+ mirror: git@github.com:samuel-hunter/gemini-request.git
  GIT_SSH_COMMAND: ssh -o StrictHostKeyChecking=no
 secrets:
 - d5d49965-cebb-4cfd-81ce-eefa5c8cdae7
 shell: false
 sources:
-- https://git.sr.ht/~shunter/cl-gemini
+- https://git.sr.ht/~shunter/gemini-request
 tasks:
 - updatemirror: |
-    cd cl-gemini
+    cd gemini-request
     git remote add mirror $mirror
     git push mirror master
 triggers: []

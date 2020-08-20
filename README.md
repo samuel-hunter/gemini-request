@@ -1,4 +1,4 @@
-# cl-gemini
+# gemini-request
 
 A library for communication to servers through the Gemini protocol.
 
@@ -22,18 +22,17 @@ reach out to recommend anything you think would improve it!
 
 ## Quick Usage
 
-Drop this project in a place that ADSF can see it - I personally
-develop this library in `~/quicklisp/local-projects/` so that you can
-use quicklisp to pull in its dependencies, `alexandria`, `cl+ssl`,
-`puri`, and `trivial-sockets`.
+Drop this project in a place that ADSF can see it - I personally use
+`~/quicklisp/local-projects/` so that quicklisp pulls in its
+dependencies, `alexandria`, `cl+ssl`, `puri`, and `trivial-sockets`.
 
 ```lisp
-* (require :cl-gemini)
+* (require :gemini-request)
 
 ;; Make a simple gemini request. It returns the response body,
 ;; code, meta text (mimetype for successful requests), and the url of
-;; the last request (say, if gemini-request handles redirects):
-* (gmi:gemini-request "gemini://gemini.circumlunar.space")
+;; the last request (say, if #'gemini-request handles redirects):
+* (gemini-request:gemini-request "gemini://gemini.circumlunar.space")
 "# Project Gemini
 
 ## Overview
@@ -50,7 +49,8 @@ Gemini is a new internet protoc...ol which:
 ## Extended Usage
 
 ```lisp
-(use-package #:cl-gemini)
+(ql:quickload :gemini-request)
+(use-package #:gemini-request)
 
 ;; You can use puri:uri objects as well.
 * (gemini-request (make-instance 'puri:uri 
@@ -70,7 +70,7 @@ Received response 51.
       
 
 ;; You can disable this by setting gemini-error-p to NIL:
-* (gemini-reqeust "//example.com/no-exist"
+* (gemini-request "//example.com/no-exist"
                   :gemini-error-p nil)
 NIL
 51
