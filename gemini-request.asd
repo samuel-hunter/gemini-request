@@ -7,6 +7,7 @@
   :version "0.1.0"
   :depends-on (#:alexandria
                #:cl+ssl
+               #:flexi-streams
                #:puri
                #:trivial-sockets)
   :serial t

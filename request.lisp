@@ -21,10 +21,8 @@
    #:gmi-code
    #:gmi-meta
    #:gmi-redirect-trace
-
-   ;; request
-   #:gemini-request*
-   #:gemini-request))
+   #:gmi-reason
+   #:gmi-charset))
 
 (in-package #:gemini-request)
 
@@ -124,13 +122,7 @@ has) a valid Gemini response code; otherwise, return NIL."
 
 ;; Conditions
 
-(define-condition gmi-error (error)
-  ((code :initarg :code :reader gmi-code)
-   (meta :initarg :meta :reader gmi-meta))
-  (:report (lambda (condition stream)
-             (with-slots (code meta) condition
-               (format stream "Response returned code ~D (~A): ~A"
-                       code (or (gmi-status code) :unknown) meta)))))
+(define-condition gmi-error (error) ())
 
 (define-condition gmi-too-many-redirects (gmi-error)
   ((redirect-trace :initarg :redirect-trace :reader gmi-redirect-trace))
@@ -138,147 +130,218 @@ has) a valid Gemini response code; otherwise, return NIL."
              (format stream "Too many redirects. Trace: ~S"
                      (slot-value condition 'redirect-trace)))))
 
-;; Write a request
+(define-condition gmi-misbehaving-server-error (gmi-error)
+  ((reason :initarg :reason :type string :reader gmi-reason))
+  (:report (lambda (condition stream)
+             (princ (slot-value condition 'reason)
+                    stream))))
 
-(defun gemini-send-line (line stream)
-  "Send a single line to a gemini stream, print CRLF, and force output."
-  (format stream "~A~C~C"
-          line
-          #\Return #\Linefeed)
-  (force-output stream))
+(define-condition gmi-warning (warning) ())
 
-;; Read a resposne
+(define-condition gmi-unknown-charset-warning (gmi-warning)
+  ((charset :initarg :charset :type string :reader gmi-charset))
+  (:report (lambda (condition stream)
+             (format stream "~S is not known to be a name for an external format."
+                     (slot-value condition 'charset)))))
 
-(defun read-line-crlf (stream)
+;; Read a response
+
+(defparameter +whitespace-bag+ #(#\Space #\Tab)
+  "Character bag for whitespace characters")
+
+(defun read-to (char-bag stream)
+  "Read until the (consumed) delimiter or EOF is reached."
   (with-output-to-string (out)
-    (loop
-      :for chr := (read-char stream nil)
-      :while (and chr (not (char= chr #\Return)))
-      :do (write-char chr out)
-          ;; consume linefeed
-      :finally (read-char stream nil))))
+    (loop :for c := (read-char stream nil)
+          :until (or (null c) (position c char-bag))
+          :do (write-char c out))))
 
-(defun parse-response-header (response)
-  "Return two values, the response code as a keyword, and the response meta."
-  (multiple-value-bind (code start)
-      (parse-integer response :junk-allowed t)
+(defun split-code-and-meta (response)
+  "Return two values from RESPONSE, an integer response code and a meta string."
+  (with-input-from-string (s response)
+    (handler-case
+        (let ((code (parse-integer (read-to +whitespace-bag+ s))))
+          (peek-char t s nil) ;; skip whitespace
+          (values code (read-line s nil "")))
+      (parse-error ()
+        ;; `parse-integer' failed, so let's replace the parse-error
+        ;; with a specific gmi-error instead.
+        (error 'gmi-misbehaving-server-error
+               :reason "Response header didn't start with a status code")))))
 
-    (with-input-from-string (s (subseq response start))
-      (peek-char t s)  ;; skip over whitespace
-      (values code
-              (read-stream-content-into-string s)))))
+(defun parse-mimetype-and-params (meta)
+  (with-input-from-string (stream meta)
+    (loop :with mimetype := (read-to #(#\;) stream)
+          :for next-char := (peek-char t stream nil)
+          :while next-char
+          :collect (cons (read-to #(#\=) stream)
+                         (read-to #(#\;) stream))
+            :into params
+          :finally (return (values mimetype params)))))
 
-(defun gemini-read-response (stream)
-  "Consume all data from STREAM and return a structured response."
-  (multiple-value-bind (code meta)
-      (parse-response-header (read-line-crlf stream))
-    (values (and (gmi-cat= :success code)
-                 (read-stream-content-into-string stream))
-            code
-            meta)))
+(defun gemini-read-response-header (stream)
+  "Read a single line from STREAM and return four values: the code of
+the response, the meta tag of the response, the mimetype of the
+response (if the code is OK, otherwise NIL), and an alist of all
+parameters of the response (if the code is OK, otherwise NIL)."
+  (multiple-value-bind (code meta) (split-code-and-meta (read-line stream))
+    (multiple-value-bind (mimetype params)
+        (if (gmi-cat= :success code)
+            (parse-mimetype-and-params meta)
+            (values nil nil))
+      (values code meta mimetype params))))
 
 ;; Set up the stream
-(defmacro with-gemini-stream ((var server port &key ssl-options) &body body)
-  (with-unique-names (socket)
-    `(let ((,socket (trivial-sockets:open-stream ,server ,port)))
-       (with-open-stream (,var (cl+ssl:make-ssl-client-stream
-                                ,socket
-                                :unwrap-stream-p t
-                                :external-format '(:utf-8 :eol-style :lf)
-                                ,@ssl-options))
-         ,@body))))
+(defun gemini-connect (server port &optional ssl-options)
+  "Connect to a Gemini server at SERVER:PORT and return an open stream
+with SSL-OPTIONS passed to CL+SSL:MAKE-SSL-CLIENT-STREAM, aside from
+EXTERNAL-FORMAT."
+  (let ((socket (trivial-sockets:open-stream server port)))
+    (apply #'cl+ssl:make-ssl-client-stream socket
+           :external-format '(:utf-8 :eol-style :crlf)
+           ssl-options)))
 
 ;; Put it together
 
-(defun gemini-request* (uri-string host port verify-ssl)
-  "Sends a Gemini request to HOST:PORT asking for the resource
-described in URI-STRING. This function returns THREE values - the body
-of the response (which is NIL in non-successful responses), the status
-code as an integer, and the response meta information.
+(defun make-external-format-or-nil (name &rest args &key &allow-other-keys)
+  "Return external formats if it doesn't raise an
+external-format-error; else, return NIL."
+  (handler-case
+      (apply #'flex:make-external-format name args)
+    (flex:external-format-error () nil)))
 
-VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM as the VERIFY
-argument. See *gemini-default-verify-ssl* for more documentation.
+(defun gemini-request-stream* (uri-string host port &optional ssl-options)
+  "Request the resource at URI-STRING at the connection HOST:PORT and
+return five values: the stream of the response body; the response code
+integer; the response meta string; the response mimetype string
+if code is successful, else NIL; and a string alist of the response
+parameters if code is successful, else NIL.
 
-This alternative command does not resolve redirects, automatically
-resolve the host or port to request from, or raise an error on
-unsuccessful response codes. If you feel unsatisfied with how
-GEMINI-REQUEST processes its input, use this instead for finer
-control."
-  (with-gemini-stream (gmi host port :ssl-options (:verify verify-ssl))
-    (gemini-send-line uri-string gmi)
-    (gemini-read-response gmi)))
+SSL-OPTIONS is a key-value plist of arguments passed to
+CL+SSL:MAKE-SSL-CLIENT-STREAM.  All key options can be passed in
+except for EXTERNAL-FORMAT. One option of note is VERIFY, which can be
+used to specify whether the server certificate should be
+verified (options are NIL, :optional, and :required). The default is
+CL+SSL:*MAKE-SSL-CLIENT-STREAM-VERIFY-DEFAULT*, which is initialized
+to :required."
+  (let ((stream (gemini-connect host port ssl-options)))
+    ;; Send request header
+    (format stream "~A~%" uri-string)
+    (force-output stream)
 
-(defun gemini-request (uri &key
-                             (proxy *gemini-default-proxy*)
-                             (verify-ssl *gemini-default-verify-ssl*)
-                             (max-redirects 5)
-                             (gemini-error-p t))
-  "Sends a Gemini request to a server and returns its response. URI is
-where the request is sent to, and can either be a string, or a
-PURI:URI object. This function returns FOUR values - the body of the
-response (which is NIL in non-successful responses), the status code
-as an integer, the response meta information (which would be the MIME
-media type in successful responses), and finally the URI the reply
-comes from (which might be different from the URI the request was sent
-to in case of redirects).
+    ;; Read the response header
+    (multiple-value-bind (code meta mimetype params)
+        (gemini-read-response-header stream)
+
+      ;; change the charset when necessary
+      (if (gmi-cat= :success code)
+        (let ((charset (cdr (assoc "charset" params :test #'string=))))
+          (cond
+            ;; change the flexi-stream's external format to the
+            ;; response body's format if specified. Raise a
+            ;; gmi-unknown-charset-warning if the external format
+            ;; isn't supported by flexi-streams.
+            (charset (if-let ((format (make-external-format-or-nil
+                                       charset :eol-style :crlf)))
+                       (setf (flex:flexi-stream-external-format stream) format)
+                       (warn 'gmi-unknown-charset-warning :charset charset)))
+            ;; with a text/* or default (text/gemini) mimetype, keep
+            ;; the stream the same (utf-8)
+            ((or (string= "" mimetype)
+                 (starts-with "text/" mimetype))
+             (values)))))
+
+      (values stream code meta mimetype params))))
+
+(defun gemini-request-stream (uri &key
+                                    (proxy *gemini-default-proxy*)
+                                    (max-redirects 5)
+                                    ssl-options)
+  "Request the resource at URI, automatically redirect when required,
+and return five values: the stream of the response body; the response
+code integer; the response meta string; the response mimetype string
+if code is successful, else NIL; and a string alist of the response
+parameters if code is successful, else NIL.
 
 If PROXY is not NIL, it should be either a string denoting a proxy
 server through which the request should be sent, or a cons pair
 of (HOST-STRING PORT-NUMBER). Defaults to *gemini-default-proxy-host*.
-
-VERIFY-SSL is passed on to CL+SSL:MAKE-SSL-CLIENT-STREAM as the VERIFY
-argument. Defaults to *gemini-default-verify-ssl*. See
-*gemini-default-verify-ssl* for more documentation.
 
 MAX-REDIRECTS is the maximum number of redirects that will be
 processed before signaling a GMI-TOO-MANY-REDIRECTS error. Negative
 values signal that it should process an infinite number of
 redirects (not recommended). Defaults to 5.
 
-GEMINI-ERROR-P denotes whether to signal a GMI-ERROR instead of
-returning a response when its code is 4x (TEMPORARY FAILURE),
-5x (PERMANENT FAILURE), 6x (CLIENT CERTIFICATE REQUIRED), or an
-unknown respone code. It does not influence raising an error for too
-many requests. Defaults to T."
+SSL-OPTIONS is a key-value plist of arguments passed to
+CL+SSL:MAKE-SSL-CLIENT-STREAM.  All key options can be passed in
+except for EXTERNAL-FORMAT. One option of note is VERIFY, which can be
+used to specify whether the server certificate should be
+verified (options are NIL, :optional, and :required). The default is
+CL+SSL:*MAKE-SSL-CLIENT-STREAM-VERIFY-DEFAULT*, which is initialized
+to :required."
   ;; Configure parameters.
   (setf uri
         (etypecase uri
           (string (puri:parse-uri uri))
-          (puri:uri (puri:copy-uri uri))))
+          (puri:uri uri)))
 
-  (etypecase proxy
-    (null (setf proxy (cons (puri:uri-host uri)
-                            +gemini-default-port+)))
-    (string (setf proxy (cons proxy +gemini-default-port+)))
-    (cons))
+  (setf proxy
+        (etypecase proxy
+          (null (cons (puri:uri-host uri)
+                      +gemini-default-port+))
+          (string (cons proxy +gemini-default-port+))
+          (cons proxy)))
 
-  (loop :with redirect-trace := ()
-        :with uri-string := (puri:render-uri uri nil)
-        :for (body code meta) := (multiple-value-list (gemini-request* uri-string
-                                                                       (car proxy) (cdr proxy)
-                                                                       verify-ssl))
-        :for redirects :upfrom 0
-        :do (ecase (gmi-category code)
-              ;; any non-exceptional categories
-              ((:success
-                :input)
-               (return (values body code meta uri-string)))
-
-              ;; continue looping with a new uri
-              (:redirect
+  (loop
+    :with redirect-trace := ()
+    :for redirects :upfrom 0
+    :do
+       (multiple-value-bind (stream code meta mimetype params)
+           (gemini-request-stream* (puri:render-uri uri nil)
+                                   (car proxy) (cdr proxy)
+                                   ssl-options)
+         (if (gmi-cat= :redirect code)
+             (progn
                (unless (minusp max-redirects)
                  (push (cons (gmi-status code) meta) redirect-trace))
-               (setf uri (puri:parse-uri meta)))
+               (setf uri (puri:merge-uris meta uri))
+               (close stream))
+             (return (values stream code meta mimetype params)))
+         (close stream))
+    :when (= redirects max-redirects)
+      :do (error 'gmi-too-many-redirects
+                 :redirect-trace redirect-trace)))
 
-              ;; failure
-              ((:temporary-failure
-                :permanent-failure
-                :client-certificate-required
-                nil)
-               (if gemini-error-p
-                   (error 'gmi-error :code code :meta meta)
-                   (return (values body code meta uri-string)))))
-        :when (= redirects max-redirects)
-          :do (error 'gmi-too-many-redirects
-                     :code code :meta meta
-                     :redirect-trace redirect-trace)))
+(defun gemini-request (uri &key
+                             (proxy *gemini-default-proxy*)
+                             (max-redirects 5)
+                             ssl-options)
+  "Request the resource at URI, automatically redirect when required,
+and return five values: the response body on a successful response,
+else NIL; the response code integer; the response meta string; the
+response mimetype string if code is successful, else NIL; and a string
+alist of the response parameters if code is successful, else NIL.
+
+If PROXY is not NIL, it should be either a string denoting a proxy
+server through which the request should be sent, or a cons pair
+of (HOST-STRING PORT-NUMBER). Defaults to *gemini-default-proxy-host*.
+
+MAX-REDIRECTS is the maximum number of redirects that will be
+processed before signaling a GMI-TOO-MANY-REDIRECTS error. Negative
+values signal that it should process an infinite number of
+redirects (not recommended). Defaults to 5.
+
+SSL-OPTIONS is a key-value plist of arguments passed to
+CL+SSL:MAKE-SSL-CLIENT-STREAM.  All key options can be passed in
+except for EXTERNAL-FORMAT. One option of note is VERIFY, which can be
+used to specify whether the server certificate should be
+verified (options are NIL, :optional, and :required). The default is
+CL+SSL:*MAKE-SSL-CLIENT-STREAM-VERIFY-DEFAULT*, which is initialized
+to :required."
+  (multiple-value-bind (stream code meta mimetype params)
+      (gemini-request-stream uri :proxy proxy
+                                 :max-redirects max-redirects
+                                 :ssl-options ssl-options)
+    (values (and (gmi-cat= :success code)
+                 (read-stream-content-into-string stream))
+            code meta mimetype params)))
