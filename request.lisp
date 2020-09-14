@@ -273,7 +273,7 @@ to :required."
 and return five values: the stream of the response body; the response
 code integer; the response meta string; the response mimetype string
 if code is successful, else NIL; a string alist of the response
-parameters if code is successful, else NIL; and the URI string of the
+parameters if code is successful, else NIL; and the URI of the
 resolved resource, for when redirects have changed it.
 
 If PROXY is not NIL, it should be either a string denoting a proxy
@@ -305,6 +305,10 @@ to :required."
           (string (cons proxy +gemini-default-port+))
           (cons proxy)))
 
+  ;; TODO figure out how to handle redirects that change the URI
+  ;; scheme. Maybe raise a condition and see how it goes from there?
+  ;; Or rise an error when it happens and provide restarts like
+  ;; `redirect-anyway'.
   (loop
     :with redirect-trace := ()
     :for redirects :upfrom 0
@@ -320,7 +324,7 @@ to :required."
                  (push (cons (gmi-status code) meta) redirect-trace))
                (setf uri (puri:merge-uris meta uri))
                (close stream))
-             (return (values stream code meta mimetype params uri-string)))
+             (return (values stream code meta mimetype params uri)))
          (close stream))
     :when (= redirects max-redirects)
       :do (error 'gmi-too-many-redirects
@@ -335,8 +339,7 @@ and return five values: the response body on a successful response,
 else NIL; the response code integer; the response meta string; the
 response mimetype string if code is successful, else NIL; a string
 alist of the response parameters if code is successful, else NIL; and
-the URI string of the resolved resource, for when redirects have
-changed it.
+the URI of the resolved resource, for when redirects have changed it.
 
 If PROXY is not NIL, it should be either a string denoting a proxy
 server through which the request should be sent, or a cons pair
