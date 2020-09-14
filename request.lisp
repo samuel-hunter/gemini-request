@@ -178,8 +178,16 @@ has) a valid Gemini response code; otherwise, return NIL."
     (loop :with mimetype := (read-to #(#\;) stream)
           :for next-char := (peek-char t stream nil)
           :while next-char
-          :collect (cons (read-to #(#\=) stream)
-                         (read-to #(#\;) stream))
+          ;; key=value pairs are collected into an alist, and
+          ;; downcased as parameters and contents are case-insensitive.
+
+          ;; NOTE: Should I filter out unsupported parameters right
+          ;; here? I was thinking about replacing supported param keys
+          ;; with keywords, but that would make users check if a key
+          ;; is a keyword or string. Filtering only supported keywords
+          ;; right here would knock two birds with one stone...
+          :collect (cons (string-downcase (read-to #(#\=) stream))
+                         (string-downcase (read-to #(#\;) stream)))
             :into params
           :finally (return (values mimetype params)))))
 
