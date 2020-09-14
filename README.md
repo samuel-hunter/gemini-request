@@ -30,20 +30,22 @@ dependencies, `alexandria`, `cl+ssl`, `puri`, and `trivial-sockets`.
 * (require :gemini-request)
 
 ;; Make a simple gemini request. It returns the response body,
-;; code, meta text (mimetype for successful requests), and the url of
-;; the last request (say, if #'gemini-request handles redirects):
+;; code, meta text, mime and parameter alist for successful requests,
+;; and the resolved uri (say, if #'gemini-request handles redirects):
 * (gemini-request:gemini-request "gemini://gemini.circumlunar.space")
 "# Project Gemini
 
 ## Overview
 
-Gemini is a new internet protoc...ol which:
+Gemini is a new internet protocol which:
 
 * Is heavier than gopher
 * Is lighter than th..."
 20
 "text/gemini"
-"gemini://gemini.circumlunar.space/"
+"text/gemini"
+()
+#<PURI:URI //gemini.circumlunar.space/>
 ```
 
 ## Extended Usage
@@ -57,30 +59,6 @@ Gemini is a new internet protoc...ol which:
 * (gemini-request (make-instance 'puri:uri 
                                  :host "example.com"
                                  :path "about"))
-
-
-;; Receiving an error code sends a gmi-error by default.
-* (handler-case
-      (gemini-request "//example.com/no-exist")
-    (gmi-error (err) (with-accessors ((code gmi-code)
-                                      (meta gmi-meta))
-                       (format t "Received response ~D: ~A~%"
-                               code meta))))
-Received response 51: Not found!
-;; An error is thrown for any valid 4x, 5x, and 6x response codes, as
-;; well as any unrecognized response codes. 1x and 2x response codes
-;; are returned as normal, and 3x redirect response codes are handled
-;; automatically.
-      
-
-;; You can disable this by setting gemini-error-p to NIL:
-* (gemini-request "//example.com/no-exist"
-                  :gemini-error-p nil)
-NIL
-51
-"Not found!"
-"//example.com/no-exist"
-
 
 ;; You can configure the maximum redirects to automatically follow
 ;; (default is 5).
@@ -108,24 +86,31 @@ Goodbye.
 
 ;; You can choose whether to verify SSL certificates (for example,
 ;; expressly allowing self-signed certificates, or forcing servers
-;; to be signed by a trusted root authority)
-* (gemini-request "//self-signed.example.com" :verify-ssl nil)
+;; to be signed by a trusted root authority). Recommended reading
+CL+SSL's MAKE-SSL-CLIENT-STREAM for all valid keyword arguments except
+for EXTERNAL-FORMAT:
+* (gemini-request "//self-signed.example.com" :ssl-options '(:verify nil))
 
-* (let ((*gemini-default-verify-ssl* nil))
-    (gemini-request "//self-signed.example.com" 
-                    :verify-ssl nil))
-                    
-;; For more details:
-(describe '*gemini-default-verify-ssl*)
+;; You can use gemini-request-stream to return an input stream as the
+;; primary value instead of the body. For text/* mimetype responses,
+;; the stream is a flexi-stream with the automatically configured
+;; external format, and for other responses, it's a raw octet stream.
+* (gemini-request-stream "//example.com")
+#<FLEXI-STREAMS:FLEXI-IO-STREAM {1234567890}>
+20
+"application/json; charset=utf-8; lang=en"
+"application/json"
+(("charset" . "utf-8") ("lang" . "en"))
+#<PURI:URI //example.com/>
 
-
-;; Finally, for lower-level control, You can use gemini-request* to
-;; send a singular request and don't do anything smart with it. It
-;; only returns three values, since it doesn't resolve redirects.
-* (gemini-request* "//host.example.com/link-that-breaks-server-cgi-code"
+;; Finally, you can use gemini-request-stream* to
+;; send a singular request and don't follow redirects.
+* (gemini-request-stream* "//host.example.com/info.json"
                    "host.example.com" +gemini-default-port+
-                   *gemini-default-verify-ssl*)
-NIL
-42
-"CGI Error"
+                   '(:verify nil))
+#<FLEXI-STREAMS:FLEXI-IO-STREAM {1234567890}>
+20
+"application/json"
+"application/json"
+()
 ```
