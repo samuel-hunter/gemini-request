@@ -4,7 +4,7 @@
   :description "Communicate to servers through the gemini protocol"
   :author "Samuel Hunter"
   :license  "BSD 3-Clause"
-  :version "0.1.0"
+  :version "0.1.1"
   :depends-on (#:alexandria
                #:cl+ssl
                #:flexi-streams
