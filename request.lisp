@@ -216,9 +216,9 @@ external-format-error; else, return NIL."
 
 (defun gemini-request-stream* (uri-string host port &optional ssl-options)
   "Request the resource at URI-STRING at the connection HOST:PORT and
-return five values: the stream of the response body; the response code
-integer; the response meta string; the response mimetype string
-if code is successful, else NIL; and a string alist of the response
+return six values: the stream of the response body; the response code
+integer; the response meta string; the response mimetype string if
+code is successful, else NIL; and a string alist of the response
 parameters if code is successful, else NIL.
 
 SSL-OPTIONS is a key-value plist of arguments passed to
@@ -264,8 +264,9 @@ to :required."
   "Request the resource at URI, automatically redirect when required,
 and return five values: the stream of the response body; the response
 code integer; the response meta string; the response mimetype string
-if code is successful, else NIL; and a string alist of the response
-parameters if code is successful, else NIL.
+if code is successful, else NIL; a string alist of the response
+parameters if code is successful, else NIL; and the URI string of the
+resolved resource, for when redirects have changed it.
 
 If PROXY is not NIL, it should be either a string denoting a proxy
 server through which the request should be sent, or a cons pair
@@ -299,9 +300,10 @@ to :required."
   (loop
     :with redirect-trace := ()
     :for redirects :upfrom 0
+    :for uri-string := (puri:render-uri uri nil)
     :do
        (multiple-value-bind (stream code meta mimetype params)
-           (gemini-request-stream* (puri:render-uri uri nil)
+           (gemini-request-stream* uri-string
                                    (car proxy) (cdr proxy)
                                    ssl-options)
          (if (gmi-cat= :redirect code)
@@ -310,7 +312,7 @@ to :required."
                  (push (cons (gmi-status code) meta) redirect-trace))
                (setf uri (puri:merge-uris meta uri))
                (close stream))
-             (return (values stream code meta mimetype params)))
+             (return (values stream code meta mimetype params uri-string)))
          (close stream))
     :when (= redirects max-redirects)
       :do (error 'gmi-too-many-redirects
@@ -323,8 +325,10 @@ to :required."
   "Request the resource at URI, automatically redirect when required,
 and return five values: the response body on a successful response,
 else NIL; the response code integer; the response meta string; the
-response mimetype string if code is successful, else NIL; and a string
-alist of the response parameters if code is successful, else NIL.
+response mimetype string if code is successful, else NIL; a string
+alist of the response parameters if code is successful, else NIL; and
+the URI string of the resolved resource, for when redirects have
+changed it.
 
 If PROXY is not NIL, it should be either a string denoting a proxy
 server through which the request should be sent, or a cons pair
@@ -342,7 +346,7 @@ used to specify whether the server certificate should be
 verified (options are NIL, :optional, and :required). The default is
 CL+SSL:*MAKE-SSL-CLIENT-STREAM-VERIFY-DEFAULT*, which is initialized
 to :required."
-  (multiple-value-bind (stream code meta mimetype params)
+  (multiple-value-bind (stream code meta mimetype params resolved-uri)
       (gemini-request-stream uri :proxy proxy
                                  :max-redirects max-redirects
                                  :ssl-options ssl-options)
@@ -351,4 +355,4 @@ to :required."
               ((typep stream 'flex:flexi-stream)
                (read-stream-content-into-string stream))
               (t (read-stream-content-into-byte-vector stream)))
-            code meta mimetype params)))
+            code meta mimetype params resolved-uri)))
