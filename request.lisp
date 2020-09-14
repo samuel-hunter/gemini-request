@@ -7,22 +7,29 @@
    #:+gemini-version+
    #:+gemini-default-port+
    #:*gemini-default-proxy*
-   #:*gemini-default-verify-ssl*
 
    ;; response code
    #:gmi-status
    #:gmi-category
    #:gmi-status=
    #:gmi-cat=
+   #:gmi-success-p
 
    ;; conditions
    #:gmi-error
    #:gmi-too-many-redirects
-   #:gmi-code
-   #:gmi-meta
    #:gmi-redirect-trace
+   #:gmi-misbehaving-server-error
    #:gmi-reason
-   #:gmi-charset))
+
+   #:gmi-warning
+   #:gmi-unknown-charset-warning
+   #:gmi-charset
+
+   ;; request
+   #:gemini-request-stream*
+   #:gemini-request-stream
+   #:gemini-request))
 
 (in-package #:gemini-request)
 
@@ -48,13 +55,6 @@ library's supported gemini protocol.")
   "The default proxy that a gemini request will go
 through. NIL (default) means requests will not go through a proxy. See
 GEMINI-REQUEST's PROXY argument for more documentation.")
-
-(defvar *gemini-default-verify-ssl* :optional
-  "The default choice for verifying an SSL certificate. It has the
-same choices as the CL+SSL:MAKE-SSL-CLIENT-STREAM's :VERIFY keyword
-argument - that is, NIL means to not verify, :OPTIONAL (default) means
-to verify if the certificate is provided, and T means to always
-verify.")
 
 (defmacro define-codes (table-var &body code-forms)
   (let ((largest-code (reduce #'max (mapcar #'cadr code-forms))))
@@ -119,6 +119,10 @@ has) a valid Gemini response code; otherwise, return NIL."
 (defun gmi-cat= (category code)
   "Return whether the keyword CATEGORY describes CODE."
   (eq category (gmi-category code)))
+
+(defun gmi-success-p (code)
+  "Return whether CODE is in the successful category."
+  (gmi-cat= :success code))
 
 ;; Conditions
 
@@ -186,7 +190,7 @@ response (if the code is OK, otherwise NIL), and an alist of all
 parameters of the response (if the code is OK, otherwise NIL)."
   (multiple-value-bind (code meta) (split-code-and-meta (read-line stream))
     (multiple-value-bind (mimetype params)
-        (if (gmi-cat= :success code)
+        (if (gmi-success-p code)
             (parse-mimetype-and-params meta)
             (values nil nil))
       (values code meta mimetype params))))
@@ -234,7 +238,7 @@ to :required."
         (gemini-read-response-header stream)
 
       ;; change the charset when necessary
-      (if (gmi-cat= :success code)
+      (if (gmi-success-p code)
         (let ((charset (cdr (assoc "charset" params :test #'string=))))
           (cond
             ;; change the flexi-stream's external format to the
@@ -342,6 +346,9 @@ to :required."
       (gemini-request-stream uri :proxy proxy
                                  :max-redirects max-redirects
                                  :ssl-options ssl-options)
-    (values (and (gmi-cat= :success code)
-                 (read-stream-content-into-string stream))
+    (values (cond
+              ((not (gmi-success-p code)) nil)
+              ((typep stream 'flex:flexi-stream)
+               (read-stream-content-into-string stream))
+              (t (read-stream-content-into-byte-vector stream)))
             code meta mimetype params)))
