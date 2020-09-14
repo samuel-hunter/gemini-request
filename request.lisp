@@ -201,7 +201,12 @@ parameters of the response (if the code is OK, otherwise NIL)."
         (if (gmi-success-p code)
             (parse-mimetype-and-params meta)
             (values nil nil))
-      (values code meta mimetype params))))
+      (values code meta
+              (if (string= "" mimetype)
+                  ;; Unspecified mimetypes are de-facto text/gemini.
+                  "text/gemini"
+                  mimetype)
+              params))))
 
 ;; Set up the stream
 (defun gemini-connect (server port &optional ssl-options)
@@ -259,8 +264,7 @@ to :required."
                        (warn 'gmi-unknown-charset-warning :charset charset)))
             ;; with a text/* or default (text/gemini) mimetype, keep
             ;; the stream the same (utf-8)
-            ((or (string= "" mimetype)
-                 (starts-with "text/" mimetype))
+            ((starts-with-subseq "text/" mimetype)
              (values)))))
 
       (values stream code meta mimetype params))))
