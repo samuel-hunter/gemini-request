@@ -2,6 +2,12 @@
 
 A library for communication to servers through the Gemini protocol.
 
+**NOTE:** gemini-request (and the main project
+[retrorocket](https://sr.ht/~shunter/retrorocket/)) has been defunct
+since November 29, 2020 (Gemini v0.14.3). This project was not meant
+to be a serious, maintained library, but rather to help in developing
+Retrorocket to see if the UI toolkit McCLIM is a good match for me.
+
 ---
 
 Project Gemini is a semi-recent internet protocol project that
@@ -56,7 +62,7 @@ Gemini is a new internet protocol which:
 
 
 ;; You can use puri:uri objects as well.
-* (gemini-request (make-instance 'puri:uri 
+* (gemini-request (make-instance 'puri:uri
                                  :host "example.com"
                                  :path "about"))
 
@@ -78,7 +84,7 @@ Goodbye.
 
 ;; You can configure your proxy:
 * (gemini-request "//example.com" :proxy "proxy.example.com")
-* (gemini-request "//example.com" 
+* (gemini-request "//example.com"
                   :proxy '("proxy-example.com" 8000))
 * (let ((*gemini-default-proxy* "proxy-example.com"))
     (gemini-request "//example.com"))
